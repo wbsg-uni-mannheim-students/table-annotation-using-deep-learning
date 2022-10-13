@@ -88,7 +88,7 @@ if __name__ == "__main__":
                     help="Serialization methods}")
 
     args = parser.parse_args()
-    
+
     method = args.method[0]
     serialization = args.serialization[0]
 
@@ -98,15 +98,15 @@ if __name__ == "__main__":
         tasks = ['cpa']
     else:
         tasks = ['cta', 'cpa']
-        
-        
+
+
     if method == 'doduo':
         assert serialization == 'all-table' , "Doduo (multi-task method) can be used only with all-table serialization"
-    
+
     if 'roberta' in args.model_name:
         assert serialization != 'all-table', 'Roberta models can not be used with all table serialization (needs to be added)'
-        
-        
+
+
     task_num_class_dict = {
             "cta": 91,
             "cpa": 176
@@ -115,7 +115,7 @@ if __name__ == "__main__":
         "cta": "data/CTA/cta_lm.pkl",
         "cpa": "data/CPA/cpa_lm.pkl",
     }
-    
+
     serialization_method_dict = {
         "cta": {
             "single-column": CTASingleColumnDataset,
@@ -126,12 +126,12 @@ if __name__ == "__main__":
             "all-table": CPAAllTableDataset
         }
     }
-    
+
     if not os.path.exists('model/'):
-        print("{} not exists. Created".format(dirpath))
-        os.makedirs(dirpath)
-    
-    
+        print("{} not exists. Created".format(model/))
+        os.makedirs(model/)
+
+
     #Tokenizer based on language model
     if 'roberta' in args.model_name:
         tokenizer = RobertaTokenizer.from_pretrained(args.model_name, use_fast=True)
@@ -139,14 +139,14 @@ if __name__ == "__main__":
     else:
         tokenizer = BertTokenizer.from_pretrained(args.model_name, use_fast=True)
         base_model = 'bert'
-   
+
     #If Doduo there are two models: one for CTA and one for CPA
     models = []
     train_datasets = []
     train_dataloaders = []
     valid_datasets = []
     valid_dataloaders = []
-        
+
     for task in tasks:
         if serialization == 'single-column':
             #Choose model
@@ -160,7 +160,7 @@ if __name__ == "__main__":
             #Choose serialization
             dataset_serialization = serialization_method_dict[task][serialization]
 
-        #Add more conditions when adding new serialization methods        
+        #Add more conditions when adding new serialization methods
         else:
             model = BertForMultiOutputClassification.from_pretrained(
                     args.model_name,
@@ -168,7 +168,7 @@ if __name__ == "__main__":
                     output_attentions=False,
                     output_hidden_states=False,
                 )
-                
+
             dataset_serialization = serialization_method_dict[task][serialization]
 
             #Doduo:
@@ -208,11 +208,11 @@ if __name__ == "__main__":
         valid_dataloaders.append(valid_dataloader)
 
         models.append(model.to(device))
-        
+
     optimizers = []
     schedulers = []
     loss_fns = []
-    
+
     for i, train_dataloader in enumerate(train_dataloaders):
         t_total = len(train_dataloader) * args.epoch
         no_decay = ["bias", "LayerNorm.weight"]
@@ -243,11 +243,11 @@ if __name__ == "__main__":
         loss_fns.append(CrossEntropyLoss())
 
     set_seed(42)
-    
+
     best_vl_micro_f1s = [-1 for _ in range(len(tasks))]
     best_vl_macro_f1s = [-1 for _ in range(len(tasks))]
     epoch_evaluation_results = [[] for _ in range(len(tasks))]
-    
+
     print("Training model")
     for epoch in range(args.epoch):
         for task_number, (task, model, train_dataset, valid_dataset, train_dataloader,
@@ -333,7 +333,7 @@ if __name__ == "__main__":
 
                         training_predictions += all_preds_filtered
                         #set_trace()
-                        training_labels += all_labels_filtered  
+                        training_labels += all_labels_filtered
                         loss = loss_fn(filtered_logits, batch["label"].float())
 
                 # Perform a backward pass to calculate the gradients.
@@ -411,7 +411,7 @@ if __name__ == "__main__":
                         all_labels_filtered = [label.tolist() for label in batch["label"] if 1 in label.tolist()]
                         validation_predictions += all_preds_filtered
 
-                        validation_labels += all_labels_filtered 
+                        validation_labels += all_labels_filtered
                         loss = loss_fn(filtered_logits, batch["label"].float())
 
                 validation_loss += loss.item()
@@ -424,7 +424,7 @@ if __name__ == "__main__":
             if vl_micro_f1 > best_vl_micro_f1s[task_number]:
 
                 best_vl_micro_f1s[task_number] = vl_micro_f1
-                model_savepath = "model/{}_{}_{}_{}-bs{}-ml-{}.pt".format(method, task, serialization, args.model_name, args.batch_size, args.max_length)    
+                model_savepath = "model/{}_{}_{}_{}-bs{}-ml-{}.pt".format(method, task, serialization, args.model_name, args.batch_size, args.max_length)
                 torch.save(model.state_dict(), model_savepath)
 
             epoch_evaluation_result.append([training_loss, tr_macro_f1, tr_micro_f1, validation_loss, vl_macro_f1, vl_micro_f1])
@@ -436,7 +436,7 @@ if __name__ == "__main__":
             .format(epoch, task, training_loss, tr_macro_f1, tr_micro_f1),
             "vl_loss={:.7f} vl_macro_f1={:.4f} vl_micro_f1={:.4f} (Total time: {:.2f} sec.)"
             .format(validation_loss, vl_macro_f1, vl_micro_f1, (t2 - t1)))
-            
+
     for task, epoch_evaluation in zip(tasks, epoch_evaluation_results):
         loss_info_df = pd.DataFrame(epoch_evaluation,
                                     columns=[
@@ -446,4 +446,3 @@ if __name__ == "__main__":
                                     ])
 
         loss_info_df.to_csv("model/{}_{}_{}_{}-bs{}-ml-{}_info.csv".format(method, task, serialization, args.model_name, args.batch_size, args.max_length))
-        
