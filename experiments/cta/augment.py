@@ -1,6 +1,8 @@
 import json
 import random
 import numpy as np
+import pandas as pd
+import nlpaug.augmenter.word as naw
 
 # https://stackoverflow.com/questions/71642183/python-structuring-a-project-with-utility-functions-shared-across-modules-at-di
 
@@ -18,6 +20,22 @@ def apply_change(cell_val, common_cells):
         return to_replace
     return cell_val
 
+def swap_row_cells(row):
+    indecies = np.arange(len(list(row)))
+    r = np.random.permutation(indecies)
+    row = pd.Series([row[idx] for idx in r])
+    return row
+
+def replace_word(column):
+    naw.SynonymAug()
+    augmented_list = [''.join(aug.augment(cell)) for cell in column]
+    return augmented_list
+
+def swap_word(column):
+    aug = naw.RandomWordAug(action = 'swap')
+    augmented_list = [''.join(aug.augment(cell)) for cell in column]
+    return augmented_list
+
 class Augmenter(object):
     """Data augmentation operator.
     """
@@ -26,9 +44,9 @@ class Augmenter(object):
 
     def augment(data_list, config):
         # it is done on a list
-        # but you can run this as a script
+        # but you can run this as a script to the
         op = config.aug
-        # Reng: swap_col_cell, shuffle_col_val, freq_cell_sampling
+        # reng
         if op == 'swap_col_cell':
             data_list = data_list.copy()
             data_list = random.sample(data_list, len(data_list))
@@ -42,21 +60,35 @@ class Augmenter(object):
             data_list = data_list.copy()
             sampled = [apply_change(item, common_cells) for item in data_list]
             return sampled
+        # munir
         elif op == 'swap_row_cell':
             # todo - what did you include from the row, i.e. attribute + value
             pass
+        # munir
         elif op == 'delete_random_rows':
             indecies = np.random.choice(len(data_list), (len(data_list) // 2))# 2 can be a hayperparameter
             column_data_list = [row for idx, row in enumerate(data_list) if idx not in indecies]
             return column_data_list
-
+        # ichen
+        elif op == 'replace_word':
+            data_list = data_list.copy()
+            replace_list = replace_word(data_list)
+            return replace_list
+        # ichen
+        elif op == 'swap_word':
+            data_list = data_list.copy()
+            swap_list = swap_word(data_list)
+            return swap_list
         else:
             return data_list
 
+    # munir
     # can also add more params for things you need
     def augment_table(df, config):
         op = config.aug
-        pass # return what? row? column?
+        op = config.aug
+        df = df.apply(swap_row_cells, axis=1)
+        return df
 
 if __name__ == '__main__':
     ag = Augmenter()
