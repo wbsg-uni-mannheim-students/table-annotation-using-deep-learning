@@ -1,0 +1,13 @@
+data/
+test.py 
+__pycache__/
+experiments/cta/*.ipynb
+experiments/cta/*.sh 
+experiments/cta/model/
+experiments/cta/*.out
+experiments/cta/slurm_output
+experiments/cta/test_reports
+experiments/cta/reports
+experiments/cta/__pycache__
+.DS_Store 
+._.DS_Store
