@@ -2,7 +2,7 @@ import json
 import random
 import numpy as np
 import pandas as pd
-import nlpaug.augmenter.word as naw
+# import nlpaug.augmenter.word as naw
 
 # https://stackoverflow.com/questions/71642183/python-structuring-a-project-with-utility-functions-shared-across-modules-at-di
 

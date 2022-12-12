@@ -818,9 +818,8 @@ def map_types(cell_value):
     match_dict = {"url" : r"(http|ftp|https):\/\/([\w_-]+(?:(?:\.[\w_-]+)+))([\w.,@?^=%&:\/~+#-]*[\w@?^=%&\/~+#-])",
                   "date" : r"\d{4}-[0,1]{0,1}[0-9]{0,1}-[0-3]{0,1}[0-9]{0,1}",
                   "real_number" : r"(\d+\.?\d*)"
-
     }
-    if cell_value == " " or cell_value == "" or cell_value == "N/A" :
+    if (cell_value == " ") or (cell_value) == "" or (cell_value == "N/A"):
         return "null"
     if re.match(match_dict["url"], cell_value) is not None:
         if re.match(match_dict["url"], cell_value).group(0) == cell_value:
@@ -851,36 +850,15 @@ def tokenize_tabert(column_data, config):
         path = '../../data/CTA/{}/Validation/'.format(config.folder) + table_title
     else:
         path = '../../data/CTA/{}/Test/'.format(config.folder) + table_title
-
+    
     df_table = pd.read_json(path, compression='gzip', lines=True)
-
-    main_col_ml = int(config.max_length * config.main_percentage)
-    other_col_ml = config.max_length - main_col_ml
-    other_col_num = len(df_table.columns) - 1
-    # other_col_average_ml = other_col_ml // other_col_num
-    excepted_row_num = 2 * (other_col_ml//other_col_num) # at least 1 tokens: datatype
-
+    
+    max_length = config.max_length - 2 # CLS and SEP
+    main_col_ml = int(max_length * config.main_percentage)
+    
     type_func = lambda x:map_types(x) +" "+ x
-#     # mean version
-#     tokenize_func = lambda x:config.tokenizer.encode_plus(text=x,
-#                                                   add_special_tokens=False,
-#                                                   padding=True,
-#                                                   truncation=True,
-#                                                   return_attention_mask=False,
-#                                                   max_length=other_col_average_ml).input_ids
-
-    tokenize_func = lambda x:config.tokenizer.encode_plus(text=x,
-                                                  add_special_tokens=False,
-                                                  padding=True,
-                                                  truncation=True,
-                                                  return_attention_mask=False,
-                                                  max_length=other_col_ml).input_ids
-
     df_table_typed = df_table.astype("string").apply(np.vectorize(type_func))
-    main_col_list = df_table_typed[int(column_index)].astype("string").tolist()
-    if config.aug != None:
-        main_col_list = Augmenter.augment(main_col_list, config=config)
-    main_col = " ".join(main_col_list)
+    main_col = " ".join(df_table_typed[int(column_index)].astype("string").to_list())
     main_col_tokens = config.tokenizer.encode_plus(text=main_col,
                                                   add_special_tokens=False,
                                                   padding=True,
@@ -888,27 +866,33 @@ def tokenize_tabert(column_data, config):
                                                   return_attention_mask=False,
                                                   max_length=main_col_ml).input_ids
 
-    other_col_table =  df_table_typed.drop(int(column_index), axis=1)
-
-    other_tokens = []
-    if excepted_row_num >= df_table_typed.shape[0]:
-        excepted_row_num = df_table_typed.shape[0]
-    for row in range(excepted_row_num):
-        other_tokens += [config.tokenizer.sep_token_id]
+    other_col_ml = max_length - len(main_col_tokens)
+    other_col_num = len(df_table.columns) - 1    
+    expected_row_num = min((other_col_ml//other_col_num), df_table_typed.shape[0])  # at least 1 tokens: datatype 
+    
+    other_col_table =  df_table_typed.drop(int(column_index), axis=1).truncate(after=expected_row_num)
+    others = []
+    
+    for row in range(expected_row_num):
+        others.append('[SEP]')
         row_data = " ".join(other_col_table.loc[row,:].tolist())
-        other_tokens += tokenize_func(row_data)
-#         other_tokens += other_col_table.loc[row,:].apply(tokenize_func).sum()
-    other_tokens = other_tokens[:other_col_ml]
-
+        others.append(row_data)
+    others = " ".join(others)
+    other_tokens = config.tokenizer.encode_plus(text=others,
+                                                  add_special_tokens=False,
+                                                  padding=True,
+                                                  truncation=True,
+                                                  return_attention_mask=False,
+                                                  max_length=other_col_ml).input_ids
     input_ids = [config.tokenizer.cls_token_id] + main_col_tokens + other_tokens + [config.tokenizer.sep_token_id]
-
-    attention_mask = [1 for _ in range(len(input_ids))]
+    attention_mask = [1 for _ in range(len(input_ids))] 
+    
     assert(len(input_ids) == len(attention_mask))
-
+    
     new_dict = {}
     for i in ('input_ids', 'attention_mask'):
         new_dict[i] = locals()[i]
-
+    
     return new_dict
 
 class CTATaBertDataset(Dataset):
@@ -982,8 +966,8 @@ class CTATaBertDataset(Dataset):
 
             print('Processing {} {} columns'.format(len(cols), split))
 
-            pool = Pool(processes=10)
-            processed_cols = list(tqdm(pool.imap(partial(tokenize_tabert, config=self), cols, chunksize=100),total=len(cols)))
+            pool = Pool(processes=32)
+            processed_cols = list(tqdm(pool.imap(partial(tokenize_tabert, config=self), cols, chunksize=10),total=len(cols)))
             pool.close()
             pool.join()
 
