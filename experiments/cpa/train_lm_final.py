@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import f1_score, confusion_matrix
 import torch
-from torch.nn import CrossEntropyLoss, BCEWithLogitsLoss
+from torch.nn import CrossEntropyLoss
 from torch.utils.data import DataLoader, RandomSampler
 from transformers import BertTokenizer, BertForSequenceClassification, BertConfig, RobertaConfig, RobertaTokenizer, RobertaForSequenceClassification
 from transformers import AdamW, get_linear_schedule_with_warmup
@@ -22,19 +22,23 @@ from dataset_final import (
     #CTA
     CTASingleColumnDataset,
     CTAAllTableDataset,
+    CTANeighborColumnDataset,
+    CTARandomColumnDataset,
+    CTATaBertDataset, 
     #CPA
     CPASingleColumnDataset,
     CPAAllTableDataset,
-    #Neighbor
-    CTANeighborColumnDataset,
-    CTARandomColumnDataset,
-    CTATaBertDataset
+    CPANeighborColumnDataset,
+    CPACosineSimColumnDataset, 
+    CPASummarizeColumnDataset, 
+    CPARandomColumnDataset, 
+    CPATaBertDataset, 
+    CPAFreqThreeDataset
 )
 
 import sys
 sys.path.insert(0,'../..')
 
-from model import BertForMultiOutputClassification, BertMultiPairPooler
 from model import BertForMultiOutputClassification, BertMultiPairPooler
 
 from util import f1_score_multilabel, set_seed
@@ -106,12 +110,12 @@ if __name__ == "__main__":
                     nargs="+",
                     default="single-column",
                     choices=[
-                        "single-column", "all-table", "neighbor",  "random_neighbor", "tabert"
+                        "single-column", "all-table", "neighbor",  "random_neighbor", "tabert", "cosine_sim", "summary", "freq"
                     ],
                     help="Serialization methods}")
     parser.add_argument("--preprocess",
                             type=str,
-                            help="Preprocessing to do, only support tuta and median now ",
+                            help="Preprocessing to do, only support tuta, median and mean now ",
                         )
     args = parser.parse_args()
 
@@ -131,15 +135,14 @@ if __name__ == "__main__":
     if 'roberta' in args.model_name:
         assert serialization != 'all-table', 'Roberta models can not be used with all table serialization (needs to be added)'
 
-# TODO add another for tabert
     task_num_class_dict = {
             "cta": 91,
             "cpa": 176,
         }
-# TODO add another task path
+
     filepaths_task_dict = {
-        "cta": "../../data/CTA/NEW_FULL/cta_lm_no_data.pkl", # single column doesn't work now
-        "cpa": "../../data/CPA/cpa_lm.pkl",
+        "cta": "../../data/CTA/NEW_FULL/cta_lm_no_data.pkl",
+        "cpa": "../../data/CPA/NEW_FULL/cpa_lm_no_data.pkl",
     }
 # TODO add another serialization
     serialization_method_dict = {
@@ -152,7 +155,13 @@ if __name__ == "__main__":
         },
         "cpa": {
             "single-column": CPASingleColumnDataset,
-            "all-table": CPAAllTableDataset
+            "all-table": CPAAllTableDataset, 
+            "neighbor": CPANeighborColumnDataset,
+            "cosine_sim":CPACosineSimColumnDataset, 
+            "summary": CPASummarizeColumnDataset, 
+            "random_neighbor": CPARandomColumnDataset,
+            "tabert": CPATaBertDataset, 
+            "freq": CPAFreqThreeDataset
         }
     }
 
@@ -178,7 +187,7 @@ if __name__ == "__main__":
 
     for task in tasks:
         # TODO add serialization
-        if (serialization == 'single-column') or (serialization == 'neighbor') or (serialization == 'random_neighbor') or (serialization == 'tabert'):
+        if (serialization == 'single-column') or (serialization == 'neighbor') or (serialization == 'random_neighbor') or (serialization == 'tabert') or (serialization == 'cosine_sim') or (serialization == 'summary') or (serialization == 'freq'):
             #Choose model
             if 'roberta' in args.model_name:
                 model_config = RobertaConfig.from_pretrained(args.model_name, num_labels=task_num_class_dict[task])
@@ -299,7 +308,7 @@ if __name__ == "__main__":
 
             for batch_idx, batch in enumerate(train_dataloader):
                 # TODO: add serialization here
-                if (serialization == 'single-column') or (serialization == 'neighbor') or (serialization == 'random_neighbor') or (serialization == 'tabert'):
+                if (serialization == 'single-column') or (serialization == 'neighbor') or (serialization == 'random_neighbor') or (serialization == 'tabert') or (serialization == 'cosine_sim') or (serialization == 'summary') or (serialization == 'freq'):
                     #Retrive input ids, attention masks and labels for batch
                     batch_input_ids = batch["data"].T.to(device)
                     batch_mask = batch["attention"].T.to(device)
@@ -383,7 +392,7 @@ if __name__ == "__main__":
             model.eval()
             for batch_idx, batch in enumerate(valid_dataloader):
                 # TODO add serialization
-                if (serialization == 'single-column') or (serialization == 'neighbor') or (serialization == 'random_neighbor') or (serialization == "tabert"):
+                if (serialization == 'single-column') or (serialization == 'neighbor') or (serialization == 'random_neighbor') or (serialization == "tabert") or (serialization == 'cosine_sim') or (serialization == 'summary') or (serialization == 'freq'):
                     batch_input_ids = batch["data"].T.to(device)
                     batch_mask = batch["attention"].T.to(device)
                     #For cross-entropy loss labels should not be vectors
@@ -461,7 +470,11 @@ if __name__ == "__main__":
             .format(epoch, task, training_loss, tr_macro_f1, tr_micro_f1),
             "vl_loss={:.7f} vl_macro_f1={:.4f} vl_micro_f1={:.4f} (Total time: {:.2f} sec.)"
             .format(validation_loss, vl_macro_f1, vl_micro_f1, (t2 - t1)), flush=True)
-
+            
+    if not os.path.exists('reports/'):
+        print("{} not exists. Created".format('reports/'))
+        os.makedirs("reports/")
+        
     for task, epoch_evaluation in zip(tasks, epoch_evaluation_results):
         loss_info_df = pd.DataFrame(epoch_evaluation,
                                     columns=[
@@ -478,7 +491,8 @@ if __name__ == "__main__":
         model_path = "model/{}_{}_{}_{}-lr-{}_bs-{}_ml-{}_seed-{}_ws-{}_preprocess-{}_aug-{}.pt".format(method, task, serialization, args.model_name, args.lr, args.batch_size, args.max_length, args.random_seed, args.window_size, args.preprocess, args.aug)
         print(model_path)
 
-        if (serialization == 'single-column') or (serialization == 'neighbor') or (serialization == 'random_neighbor') or (serialization == 'tabert'):
+        # todo
+        if (serialization == 'single-column') or (serialization == 'neighbor') or (serialization == 'random_neighbor') or (serialization == 'tabert') or (serialization == 'cosine_sim') or (serialization == 'summary') or (serialization == 'freq'):
             #Choose model
             if 'roberta' in args.model_name:
                 model_config = RobertaConfig.from_pretrained(args.model_name, num_labels=task_num_class_dict[task])
@@ -520,7 +534,6 @@ if __name__ == "__main__":
                 config = BertConfig.from_pretrained(args.model_name)
                 model.bert.pooler = BertMultiPairPooler(config).to(device)
 
-
         #Load test datasets and datasetloaders
         test_dataset = dataset_serialization(filepath=filepaths_task_dict[task],
                                     split="test",
@@ -542,7 +555,8 @@ if __name__ == "__main__":
 
         eval_dict = {}
         for batch_idx, batch in enumerate(test_dataloader):
-            if (serialization == 'single-column') or (serialization == 'neighbor') or (serialization == 'random_neighbor') or (serialization == 'tabert'):
+            # todo 
+            if (serialization == 'single-column') or (serialization == 'neighbor') or (serialization == 'random_neighbor') or (serialization == 'tabert') or (serialization == 'cosine_sim') or (serialization == 'summary') or (serialization == 'freq'):
 
                 batch_input_ids = batch["data"].T.to(device)
                 batch_mask = batch["attention"].T.to(device)
