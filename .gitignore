@@ -1,4 +1,4 @@
-data/
+data
 test.py 
 __pycache__/
 experiments/cta/*.ipynb
@@ -19,3 +19,12 @@ experiments/cpa/slurm_output
 experiments/cpa/test_reports
 experiments/cpa/reports
 experiments/cpa/__pycache__
+experiments_final_phase/cpa/model
+experiments_final_phase/cpa/reports
+experiments_final_phase/cpa/slurm_output
+experiments_final_phase/cta/model
+experiments_final_phase/cta/reports
+experiments_final_phase/cta/slurm_output
+experiments_final_phase/cpa/*.sh
+experiments_final_phase/cta/*.sh
+
