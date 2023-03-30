@@ -27,4 +27,5 @@ experiments_final_phase/cta/reports
 experiments_final_phase/cta/slurm_output
 experiments_final_phase/cpa/*.sh
 experiments_final_phase/cta/*.sh
+.gitignore
 
