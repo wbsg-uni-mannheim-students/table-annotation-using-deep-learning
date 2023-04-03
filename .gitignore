@@ -27,5 +27,10 @@ experiments_final_phase/cta/reports
 experiments_final_phase/cta/slurm_output
 experiments_final_phase/cpa/*.sh
 experiments_final_phase/cta/*.sh
-.gitignore
-
+experiments_final_phase/cpa/.ipynb_checkpoints/
+experiments_final_phase/cta/.ipynb_checkpoints/
+data_turl
+experiments_turl/cpa/model
+experiments_turl/cpa/reports
+experiments_turl/cta/model
+experiments_turl/cta/reports

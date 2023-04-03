@@ -40,3 +40,20 @@ def set_seed(seed: int):
     For detailed discussion on the reproduciability on multiple GPU
     https://discuss.pytorch.org/t/reproducibility-over-multigpus-is-impossible-until-randomness-of-threads-is-controled-and-yet/47079
     """
+    
+def replace_special_tokens(text):
+    r = {
+        'type': '[T]',
+        'median_length': '[MEL]',
+        'max_length': '[MAL]',
+        'min_length': '[MIL]',
+        'n_distinct': '[D]',
+        'min': '[MI]',
+        'max': '[MA]',
+        'mean': '[ME]',
+        'std': '[S]',
+    }
+    
+    for key in r:
+        text = text.replace(key, r[key])
+    return text

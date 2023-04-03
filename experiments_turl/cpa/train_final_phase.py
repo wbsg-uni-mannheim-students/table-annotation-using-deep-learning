@@ -12,19 +12,19 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import f1_score, confusion_matrix
 import torch
-from torch.nn import CrossEntropyLoss
+from torch.nn import CrossEntropyLoss, BCEWithLogitsLoss
 from torch.utils.data import DataLoader, RandomSampler
 from transformers import BertTokenizer, BertForSequenceClassification, BertConfig, RobertaConfig, RobertaTokenizer, RobertaForSequenceClassification, AutoTokenizer
 from transformers import AdamW, get_linear_schedule_with_warmup
 
-from dataset_last_phase import (
+from dataset_final_phase import (
     collate_fn,
     #CTA
-    CTASumNeighborColumnDataset,
     CTAColTaBertDataset,
-    CTATaBertDataset,
-    CTANeighborColumnDataset, 
-    CTASingleColumnDataset
+    #CPA
+    CPAColTaBertDataset, 
+    CPATaBertDataset, 
+    CPANoMainNeighborColumnDataset
 )
 
 import sys
@@ -64,6 +64,11 @@ if __name__ == "__main__":
         help="Number of column pairs, 1 or 2 pairs",
     )
     parser.add_argument(
+        "--aug",
+        type=str,
+        help="Augmentation to do, None if not specified",
+    )
+    parser.add_argument(
         "--epoch",
         default=5,
         type=int,
@@ -96,18 +101,13 @@ if __name__ == "__main__":
                     nargs="+",
                     default="single-column",
                     choices=[
-                        "nomain_neighbor", "sum_neighbor", "col_tabert", "tabert", "single_col", "neighbor"
+                        "nomain_neighbor", "sum_neighbor", "col_tabert", "tabert"
                     ],
                     help="Serialization methods}")
     parser.add_argument("--preprocess",
                             type=str,
                             help="Preprocessing to do, only support tuta, median and mean now",
                         )
-    parser.add_argument(
-        "--aug",
-        type=str,
-        help="Augmentation to do, None if not specified",
-    )
     args = parser.parse_args()
 
     method = args.method[0]
@@ -127,22 +127,23 @@ if __name__ == "__main__":
         assert serialization != 'all-table', 'Roberta models can not be used with all table serialization (needs to be added)'
 
     task_num_class_dict = {
-            "cta": 91,
-            "cpa": 176,
+            "cta": 255,
+            "cpa": 121,
         }
 
     filepaths_task_dict = {
-        "cta": "../../data/CTA/NEW_FULL/cta_lm_no_data.pkl",
-        "cpa": "../../data/CPA/NEW_FULL/cpa_lm_no_data.pkl",
+        "cta": "../../data/turl_cta_data/cta_turl_lm.pkl",
+        "cpa": "../../data/turl_cpa_data/cpa_turl_lm.pkl",
     }
 # TODO add another serialization
     serialization_method_dict = {
         "cta": {
             "col_tabert": CTAColTaBertDataset, 
-            "sum_neighbor": CTASumNeighborColumnDataset, 
-            "tabert": CTATaBertDataset,
-            "single_col": CTASingleColumnDataset, 
-            "neighbor": CTANeighborColumnDataset
+        },
+        "cpa": {
+            "col_tabert": CPAColTaBertDataset, 
+            "tabert": CPATaBertDataset,
+            "nomain_neighbor": CPANoMainNeighborColumnDataset
         }
     }
 
@@ -169,9 +170,8 @@ if __name__ == "__main__":
     valid_dataloaders = []
 
     for task in tasks:
-
         # TODO add serialization
-        if (serialization == 'col_tabert') or (serialization == 'sum_neighbor') or (serialization == 'nomain_neighbor') or (serialization == 'tabert') or (serialization == 'single_col') or (serialization == 'neighbor'):
+        if (serialization == 'col_tabert') or (serialization == 'sum_neighbor') or (serialization == 'nomain_neighbor') or (serialization == 'tabert'):
             #Choose model
             if 'roberta' in args.model_name:
                 model = RobertaForSequenceClassification.from_pretrained(args.model_name, num_labels=task_num_class_dict[task])
@@ -181,21 +181,8 @@ if __name__ == "__main__":
                 model.resize_token_embeddings(len(tokenizer))
             dataset_serialization = serialization_method_dict[task][serialization]
         else:
-            model = BertForMultiOutputClassification.from_pretrained(
-                    args.model_name,
-                    num_labels=task_num_class_dict[task],
-                    output_attentions=False,
-                    output_hidden_states=False,
-                )
+            pass
 
-            dataset_serialization = serialization_method_dict[task][serialization]
-
-            #Doduo:
-            if task == "cpa":
-                # Use column pair embeddings
-                config = BertConfig.from_pretrained(args.model_name)
-                model.bert.pooler = BertMultiPairPooler(config).to(device)
-                
         print("Task is {}_{}_{}_{}-lr-{}_bs-{}_ml-{}_seed-{}_ws-{}_preprocess-{}_aug-{}_mp-{}".format(method, task, serialization, args.model_name, args.lr, args.batch_size, args.max_length, args.random_seed, args.window_size, args.preprocess, args.aug, args.mp))
 
         train_dataset = dataset_serialization(filepath=filepaths_task_dict[task],
@@ -298,69 +285,26 @@ if __name__ == "__main__":
 
             for batch_idx, batch in enumerate(train_dataloader):
                 # TODO: add serialization here
-                if (serialization == 'col_tabert') or (serialization == 'sum_neighbor') or (serialization == 'nomain_neighbor') or (serialization == 'tabert') or (serialization == 'single_col') or (serialization == 'neighbor'):
-                    #Retrive input ids, attention masks and labels for batch
-                    batch_input_ids = batch["data"].T.to(device)
-                    batch_mask = batch["attention"].T.to(device)
-                    #For cross-entropy loss labels should not be vectors
-                    batch_labels = torch.tensor([label.tolist().index(1) for label in batch["label"]]).to(device)
-                    loss, logits = model(batch_input_ids, token_type_ids=None, attention_mask=batch_mask, labels=batch_labels, return_dict=False)
-
-                    #Retrive predicted labels for batch
-                    for pred in logits.argmax(axis=-1):
-                        y = [0] * logits.shape[1]
-                        y[pred] = 1
-                        training_predictions.append(y)
+                batch_input_ids = batch["data"].T.to(device)
+                batch_mask = batch["attention"].T.to(device)
+                
+                if (serialization == 'col_tabert') or (serialization == 'sum_neighbor') or (serialization == 'nomain_neighbor') or (serialization == 'tabert'):
+                    batch_labels = batch["label"].float().to(device)
+                    logits, = model(batch_input_ids, token_type_ids=None, attention_mask=batch_mask, return_dict=False)        
+                    loss_fct = BCEWithLogitsLoss()
+                    loss = loss_fct(logits, batch_labels.float())
+                    
+                    for pred in logits.cpu().detach():
+                        sigmoid = torch.nn.Sigmoid()
+                        probs = sigmoid(pred)
+                        l_preds = np.zeros(probs.shape)
+                        l_preds[np.where(probs >= 0.5)] = 1
+                        training_predictions.append(l_preds)
 
                     #True labels:
                     training_labels += batch["label"].cpu().detach().numpy().tolist()
                 else:
-                    # Table serialization case
-                    batch_labels = torch.tensor([label.tolist().index(1) for label in batch["label"] if 1 in label.tolist()]).to(device)
-                    logits, = model(input_ids = batch["data"].T)
-
-                    # Align the tensor shape when the size is 1
-                    if len(logits.shape) == 2:
-                        logits = logits.unsqueeze(0)
-
-                    cls_indexes = torch.nonzero( batch["data"].T == tokenizer.cls_token_id)
-                    filtered_logits = torch.zeros(cls_indexes.shape[0], logits.shape[2]).to(device)
-
-                    #Mark where CLS tokens are located
-                    for n in range(cls_indexes.shape[0]):
-                        i, j = cls_indexes[n]
-                        logit_n = logits[i, j, :]
-                        filtered_logits[n] = logit_n
-
-                    if task == 'cta':
-                        for pred in filtered_logits.argmax(axis=-1):
-                            y = [0] * filtered_logits.shape[1]
-                            y[pred] = 1
-                            training_predictions.append(y)
-
-                        training_labels += batch["label"].cpu().detach().numpy().tolist()
-                        loss = loss_fn(filtered_logits, batch_labels)
-
-                    else:
-                        #Change
-                        all_preds = []
-                        for pred in filtered_logits.argmax(axis=-1):
-                            y = [0] * filtered_logits.shape[1]
-                            y[pred] = 1
-                            all_preds.append(y)
-
-                        all_labels = batch["label"].cpu().detach().numpy()
-                        # Ignore the very first CLS token
-                        idxes = np.where(all_labels > 0)[0]
-                        #set_trace()
-
-                        all_preds_filtered = [ pred for i, pred in enumerate(all_preds) if i in idxes ]
-                        all_labels_filtered = [label.tolist() for label in batch["label"] if 1 in label.tolist()]
-
-                        training_predictions += all_preds_filtered
-                        #set_trace()
-                        training_labels += all_labels_filtered
-                        loss = loss_fn(filtered_logits, batch["label"].float())
+                    pass
 
                 # Perform a backward pass to calculate the gradients.
                 loss.backward()
@@ -382,62 +326,25 @@ if __name__ == "__main__":
             model.eval()
             for batch_idx, batch in enumerate(valid_dataloader):
                 # TODO add serialization
-                if (serialization == 'col_tabert') or (serialization == 'sum_neighbor') or (serialization == 'nomain_neighbor') or (serialization == 'tabert') or (serialization == 'single_col') or (serialization == 'neighbor'):
-                    batch_input_ids = batch["data"].T.to(device)
-                    batch_mask = batch["attention"].T.to(device)
-                    #For cross-entropy loss labels should not be vectors
-                    batch_labels = torch.tensor([label.tolist().index(1) for label in batch["label"]]).to(device)
-                    loss, logits = model(batch_input_ids, token_type_ids=None, attention_mask=batch_mask, labels=batch_labels, return_dict=False)
-
-                    for p in logits.argmax(axis=-1):
-                        y = [0] * logits.shape[1]
-                        y[p] = 1
-                        validation_predictions.append(y)
+                batch_input_ids = batch["data"].T.to(device)
+                batch_mask = batch["attention"].T.to(device)
+                
+                if (serialization == 'col_tabert') or (serialization == 'sum_neighbor') or (serialization == 'nomain_neighbor') or (serialization == 'tabert'):
+                    batch_labels = batch["label"].float().to(device)
+                    logits, = model(batch_input_ids, token_type_ids=None, attention_mask=batch_mask, return_dict=False)        
+                    loss_fct = BCEWithLogitsLoss()
+                    loss = loss_fct(logits, batch_labels.float())
+                    
+                    for pred in logits.cpu().detach():
+                        sigmoid = torch.nn.Sigmoid()
+                        probs = sigmoid(pred)
+                        l_preds = np.zeros(probs.shape)
+                        l_preds[np.where(probs >= 0.5)] = 1
+                        validation_predictions.append(l_preds)
 
                     validation_labels += batch["label"].cpu().detach().numpy().tolist()
                 else:
-                    batch_labels = torch.tensor([label.tolist().index(1) for label in batch["label"] if 1 in label.tolist()]).to(device)
-                    logits, = model(input_ids = batch["data"].T)
-
-                    # Align the tensor shape when the size is 1
-                    if len(logits.shape) == 2:
-                        logits = logits.unsqueeze(0)
-
-                    cls_indexes = torch.nonzero( batch["data"].T == tokenizer.cls_token_id)
-                    filtered_logits = torch.zeros(cls_indexes.shape[0], logits.shape[2]).to(device)
-
-                    #Mark where CLS tokens are located
-                    for n in range(cls_indexes.shape[0]):
-                        i, j = cls_indexes[n]
-                        logit_n = logits[i, j, :]
-                        filtered_logits[n] = logit_n
-
-                    if task == 'cta':
-                        for pred in filtered_logits.argmax(axis=-1):
-                            y = [0] * filtered_logits.shape[1]
-                            y[pred] = 1
-                            validation_predictions.append(y)
-
-                        validation_labels += batch["label"].cpu().detach().numpy().tolist()
-                        loss = loss_fn(filtered_logits, batch_labels)
-
-                    else:
-                        all_preds = []
-                        for pred in filtered_logits.argmax(axis=-1):
-                            y = [0] * filtered_logits.shape[1]
-                            y[pred] = 1
-                            all_preds.append(y)
-
-                        all_labels = batch["label"].cpu().detach().numpy()
-                        # Ignore the very first CLS token
-                        idxes = np.where(all_labels > 0)[0]
-
-                        all_preds_filtered = [ pred for i, pred in enumerate(all_preds) if i in idxes ]
-                        all_labels_filtered = [label.tolist() for label in batch["label"] if 1 in label.tolist()]
-                        validation_predictions += all_preds_filtered
-
-                        validation_labels += all_labels_filtered
-                        loss = loss_fn(filtered_logits, batch["label"].float())
+                    pass
 
                 validation_loss += loss.item()
 
@@ -482,7 +389,7 @@ if __name__ == "__main__":
         print(model_path)
 
         # todo
-        if (serialization == 'col_tabert') or (serialization == 'sum_neighbor') or (serialization == 'nomain_neighbor') or (serialization == 'tabert') or (serialization == 'single_col') or (serialization == 'neighbor'):
+        if (serialization == 'col_tabert') or (serialization == 'sum_neighbor') or (serialization == 'nomain_neighbor') or (serialization == 'tabert'):
             #Choose model
             if 'roberta' in args.model_name:
                 model = RobertaForSequenceClassification.from_pretrained(args.model_name, num_labels=task_num_class_dict[task])
@@ -496,31 +403,7 @@ if __name__ == "__main__":
 
         #Add more conditions when adding new serialization methods
         else:
-            if 'roberta' in args.model_name:
-                pass
-                # model = RobertaForMultiOutputClassification.from_pretrained(
-                #         args.model_name,
-                #         num_labels=task_num_class_dict[task],
-                #         output_attentions=False,
-                #         output_hidden_states=False,
-                #     ).to(device)
-            else:
-                model = BertForMultiOutputClassification.from_pretrained(
-                        args.model_name,
-                        num_labels=task_num_class_dict[task],
-                        output_attentions=False,
-                        output_hidden_states=False,
-                    ).to(device)
-
-            dataset_serialization = serialization_method_dict[task][serialization]
-
-            #What is the difference: using multipair pooler instead of usual pooler
-            if task == "cpa":
-                print("Use column-pair pooling")
-                #Change for Roberta!!!
-                # Use column pair embeddings
-                config = BertConfig.from_pretrained(args.model_name)
-                model.bert.pooler = BertMultiPairPooler(config).to(device)
+            pass
 
         #Load test datasets and datasetloaders
         test_dataset = dataset_serialization(filepath=filepaths_task_dict[task],
@@ -546,57 +429,25 @@ if __name__ == "__main__":
         eval_dict = {}
         for batch_idx, batch in enumerate(test_dataloader):
             # todo 
-            if (serialization == 'col_tabert') or (serialization == 'sum_neighbor') or (serialization == 'nomain_neighbor') or (serialization == 'tabert') or (serialization == 'single_col') or (serialization == 'neighbor'):
+            batch_input_ids = batch["data"].T.to(device)
+            batch_mask = batch["attention"].T.to(device)
+                
+            if (serialization == 'col_tabert') or (serialization == 'sum_neighbor') or (serialization == 'nomain_neighbor') or (serialization == 'tabert'):
+                batch_labels = batch["label"].float().to(device)
+                logits, = model(batch_input_ids, token_type_ids=None, attention_mask=batch_mask, return_dict=False)        
+                #loss_fct = BCEWithLogitsLoss()
+                #loss = loss_fct(logits, batch_labels.float())
 
-                batch_input_ids = batch["data"].T.to(device)
-                batch_mask = batch["attention"].T.to(device)
-                #For cross-entropy loss labels should not be vectors
-                batch_labels = torch.tensor([label.tolist().index(1) for label in batch["label"]]).to(device)
-
-                loss, logits = model(batch_input_ids, token_type_ids=None, attention_mask=batch_mask, labels=batch_labels, return_dict=False)
-
-                for p in logits.argmax(axis=-1):
-                    y = [0] * logits.shape[1]
-                    y[p] = 1
-                    test_predictions.append(y)
+                for pred in logits.cpu().detach():
+                    sigmoid = torch.nn.Sigmoid()
+                    probs = sigmoid(pred)
+                    l_preds = np.zeros(probs.shape)
+                    l_preds[np.where(probs >= 0.5)] = 1
+                    test_predictions.append(l_preds)
 
                 test_labels += batch["label"].cpu().detach().numpy().tolist()
             else:
-                logits, = model(input_ids = batch["data"].T)
-
-                # Align the tensor shape when the size is 1
-                if len(logits.shape) == 2:
-                    logits = logits.unsqueeze(0)
-
-                cls_indexes = torch.nonzero( batch["data"].T == tokenizer.cls_token_id)
-                filtered_logits = torch.zeros(cls_indexes.shape[0], logits.shape[2]).to(device)
-
-                #Mark where CLS tokens are located
-                for n in range(cls_indexes.shape[0]):
-                    i, j = cls_indexes[n]
-                    logit_n = logits[i, j, :]
-                    filtered_logits[n] = logit_n
-
-                if task == 'cta':
-                    for pred in filtered_logits.argmax(axis=-1):
-                        y = [0] * filtered_logits.shape[1]
-                        y[pred] = 1
-                        test_predictions.append(y)
-
-                    test_labels += batch["label"].cpu().detach().numpy().tolist()
-
-                else:
-                    all_preds = []
-                    for pred in filtered_logits.argmax(axis=-1):
-                        y = [0] * filtered_logits.shape[1]
-                        y[pred] = 1
-                        all_preds.append(y)
-
-                    all_labels = batch["label"].cpu().detach().numpy()
-                    # Ignore the very first CLS token
-                    idxes = np.where(all_labels > 0)[0]
-                    test_predictions += [ pred for i, pred in enumerate(all_preds) if i in idxes ]
-                    test_labels += [label.tolist() for label in batch["label"] if 1 in label.tolist()]
+                pass
 
         ts_micro_f1, ts_macro_f1, ts_class_f1, ts_conf_mat = f1_score_multilabel(test_labels, test_predictions)
 
